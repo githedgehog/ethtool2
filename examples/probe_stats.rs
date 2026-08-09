@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: MIT
+//! Dump a raw STATS_GET reply so the `type-value` encoding can be read off
+//! the wire rather than guessed at.
+use netlink_packet_core::Emitable;
+use netlink_packet_ethtool::{EthtoolCmd, EthtoolMessage, StatsAttr};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let dev = std::env::args().nth(1).unwrap();
+    let (connection, handle) = ethtool2::new_connection()?;
+    tokio::spawn(connection);
+
+    let groups: Vec<String> = std::env::args().skip(2).collect();
+    let groups: Vec<String> = if groups.is_empty() {
+        StatsAttr::STANDARD_GROUPS
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        groups
+    };
+    let attrs = StatsAttr::request(&dev, groups);
+    // Show exactly what we send.
+    let mut wire = vec![0u8; attrs.as_slice().buffer_len()];
+    attrs.as_slice().emit(&mut wire);
+    println!(
+        "request {} bytes: {:02x?}",
+        wire.len(),
+        &wire[..wire.len().min(64)]
+    );
+
+    let replies = handle
+        .request(EthtoolMessage::Stats(EthtoolCmd::StatsGet, attrs), false)
+        .await?;
+    println!("{} reply message(s)", replies.len());
+    for reply in &replies {
+        let EthtoolMessage::Stats(cmd, attributes) = reply else {
+            println!("  (unmodelled: {:?})", reply.cmd());
+            continue;
+        };
+        println!("cmd {cmd:?}, {} attribute(s)", attributes.len());
+        for a in attributes {
+            match a {
+                StatsAttr::Group(g) => println!(
+                    "  GRP id={:?} ss_id={:?} stats={} hist_rx={} hist_tx={}",
+                    g.id,
+                    g.string_set_id,
+                    g.stats.len(),
+                    g.hist_rx.len(),
+                    g.hist_tx.len()
+                ),
+                other => println!("  {other:?}"),
+            }
+        }
+    }
+    Ok(())
+}

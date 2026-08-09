@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "ethtool2"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "scratch handle crate for verifying netlink-packet-ethtool against hardware"
+
+[features]
+default = ["tokio_socket"]
+tokio_socket = ["genetlink/tokio_socket", "tokio"]
+
+[dependencies]
+futures = "0.3"
+genetlink = { version = "0.2", path = "../genetlink", default-features = false }
+netlink-packet-core = "0.8"
+netlink-packet-ethtool = { version = "0.1", path = "../netlink-packet-ethtool" }
+netlink-packet-generic = "0.4"
+tokio = { version = "1", features = ["rt"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
