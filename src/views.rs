@@ -10,15 +10,11 @@
 //! the kernel fills in both the name and the index whichever one the request
 //! used, so a request by index learns the name and vice versa.
 
-use std::fmt;
-
 use netlink_packet_ethtool::{
-    Bitset, Duplex, FeaturesAttr, FecAttr, FecStats, HeaderAttr, HistBucket, LinkExtState,
-    LinkInfoAttr, LinkModesAttr, LinkStateAttr, PauseAttr, PauseStats, PrivFlagsAttr, StatsAttr,
-    StatsGroup, StatsGroupId, StringSet, StrsetAttr, SPEED_UNKNOWN,
+    fec, Bitset, Duplex, FeaturesAttr, FecAttr, FecStats, HeaderAttr, HistBucket, LinkExtState,
+    LinkInfoAttr, LinkModesAttr, LinkStateAttr, PauseAttr, PauseStats, Port, PrivFlagsAttr,
+    StatsAttr, StatsGroup, StatsGroupId, StringSet, StrsetAttr, SPEED_UNKNOWN,
 };
-
-use crate::request::stats_group_name;
 
 /// Which device a reply describes, from its header.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -36,57 +32,6 @@ impl ReplyDevice {
                 HeaderAttr::DevName(name) => self.name = Some(name.clone()),
                 _ => {}
             }
-        }
-    }
-}
-
-/// The connector, `PORT_*` from `linux/ethtool.h`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Port {
-    TwistedPair,
-    Aui,
-    Mii,
-    Fibre,
-    Bnc,
-    DirectAttach,
-    /// `PORT_NONE`: the port has no connector, e.g. a virtual device.
-    None,
-    /// `PORT_OTHER`.
-    Other,
-    /// A value this crate does not know.
-    Unknown(u8),
-}
-
-impl From<u8> for Port {
-    fn from(value: u8) -> Self {
-        match value {
-            0x00 => Self::TwistedPair,
-            0x01 => Self::Aui,
-            0x02 => Self::Mii,
-            0x03 => Self::Fibre,
-            0x04 => Self::Bnc,
-            0x05 => Self::DirectAttach,
-            0xef => Self::None,
-            0xff => Self::Other,
-            other => Self::Unknown(other),
-        }
-    }
-}
-
-impl fmt::Display for Port {
-    /// The words `ethtool(8)` prints after `Port:`.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TwistedPair => f.write_str("Twisted Pair"),
-            Self::Aui => f.write_str("AUI"),
-            Self::Mii => f.write_str("MII"),
-            Self::Fibre => f.write_str("FIBRE"),
-            Self::Bnc => f.write_str("BNC"),
-            Self::DirectAttach => f.write_str("Direct Attach Copper"),
-            Self::None => f.write_str("None"),
-            Self::Other => f.write_str("Other"),
-            Self::Unknown(value) => write!(f, "Unknown! ({value})"),
         }
     }
 }
@@ -403,10 +348,6 @@ impl From<Vec<PrivFlagsAttr>> for PrivateFlags {
     }
 }
 
-/// The FEC encodings among the link-mode bits, with the kernel's names for
-/// them (`enum ethtool_link_mode_bit_indices`, uapi).
-const FEC_LINK_MODES: [(u32, &str); 4] = [(49, "None"), (50, "RS"), (51, "BASER"), (74, "LLRS")];
-
 /// Forward error correction, from `FEC_GET`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
@@ -439,12 +380,7 @@ impl Fec {
                 .then_some(bit.name.as_deref())
                 .flatten()
         });
-        from_modes.or_else(|| {
-            FEC_LINK_MODES
-                .iter()
-                .find(|(bit, _)| *bit == active)
-                .map(|(_, name)| *name)
-        })
+        from_modes.or_else(|| fec::link_mode_name(active))
     }
 }
 
@@ -526,7 +462,7 @@ pub struct GroupStats {
 impl GroupStats {
     /// The group's name as `ethtool -S --groups` takes it, e.g. `eth-mac`.
     pub fn label(&self) -> Option<&'static str> {
-        self.group.and_then(stats_group_name)
+        self.group.and_then(StatsGroupId::name)
     }
 
     /// A counter's value, by name. Needs names resolved.
@@ -679,14 +615,6 @@ mod tests {
         assert_eq!(view.phy_address, Some(0));
         assert_eq!(view.transceiver, Some(0));
         assert_eq!(view.attributes, attributes);
-    }
-
-    #[test]
-    fn port_names() {
-        assert_eq!(Port::from(5).to_string(), "Direct Attach Copper");
-        assert_eq!(Port::from(0xef), Port::None);
-        assert_eq!(Port::from(0xff), Port::Other);
-        assert_eq!(Port::from(0x42), Port::Unknown(0x42));
     }
 
     #[test]

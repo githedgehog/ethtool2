@@ -38,7 +38,6 @@
 
 pub use netlink_packet_ethtool as packet_ethtool;
 
-mod device;
 mod errors;
 mod handle;
 mod raw;
@@ -46,28 +45,20 @@ mod request;
 mod views;
 
 pub use netlink_packet_ethtool::{
-    Bitset, BitsetBit, Duplex, EepromWindow, FecCounter, FecHistBin, FecStats, HistBucket,
-    LinkExtState, PauseStats, RequestFlags, StatsGroupId, StringEntry, StringSet, WindowError,
+    Bitset, BitsetBit, Device, Duplex, EepromWindow, FecCounter, FecHistBin, FecStats, HistBucket,
+    LinkExtState, PauseStats, Port, RequestFlags, StatsGroupId, StringEntry, StringSet,
+    WindowError, STANDARD_STATS_GROUPS,
 };
 
 pub use self::{
-    device::Device,
     errors::Error,
     handle::Handle,
     raw::RawMessage,
     views::{
-        Counter, Feature, Features, Fec, GroupStats, LinkInfo, LinkModes, LinkState, Pause, Port,
+        Counter, Feature, Features, Fec, GroupStats, LinkInfo, LinkModes, LinkState, Pause,
         PrivateFlags, ReplyDevice, Stats, StringSets,
     },
 };
-
-/// The four standardised statistics groups, for [`Handle::stats`].
-pub const STANDARD_STATS_GROUPS: [StatsGroupId; 4] = [
-    StatsGroupId::EthPhy,
-    StatsGroupId::EthMac,
-    StatsGroupId::EthCtrl,
-    StatsGroupId::Rmon,
-];
 
 /// Open a connection to the ethtool family.
 ///

@@ -5,7 +5,7 @@
 //! escape hatch, so nothing on the way back is decoded by the packet crate.
 use ethtool2::{
     packet_ethtool::{constants::ETHTOOL_MSG_STATS_GET, StatsAttr},
-    RawMessage,
+    Bitset, Device, RawMessage,
 };
 use netlink_packet_core::NlasIterator;
 
@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         groups
     };
-    let request = RawMessage::encode(ETHTOOL_MSG_STATS_GET, &StatsAttr::request(&dev, groups));
+    let request = RawMessage::encode(ETHTOOL_MSG_STATS_GET, &stats_by_name(&dev, groups));
 
     match handle.raw(request, false).await {
         Ok(replies) => {
@@ -75,4 +75,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => println!("request failed: {e}"),
     }
     Ok(())
+}
+
+/// A `STATS_GET` selecting `groups` by whatever names were typed, known to
+/// the packet crate or not, so the probe can ask for groups it cannot model.
+fn stats_by_name(dev: &str, groups: Vec<String>) -> Vec<StatsAttr> {
+    vec![
+        StatsAttr::Header(Device::from(dev).header(Default::default())),
+        StatsAttr::Groups(Bitset::select_names(groups)),
+    ]
 }

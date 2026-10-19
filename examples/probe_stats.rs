@@ -4,7 +4,9 @@
 //!
 //! Goes through [`ethtool2::Handle::request`] with a message built by the
 //! packet crate, and prints the decoded groups without any view on top.
-use ethtool2::packet_ethtool::{EthtoolCmd, EthtoolMessage, StatsAttr};
+use ethtool2::packet_ethtool::{
+    Bitset, Device, EthtoolCmd, EthtoolMessage, StatsAttr, STANDARD_STATS_GROUPS,
+};
 use netlink_packet_core::Emitable;
 
 #[tokio::main]
@@ -15,16 +17,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (connection, handle) = ethtool2::new_connection()?;
     tokio::spawn(connection);
 
+    // Names as typed, so a group the packet crate does not model can still
+    // be asked for; the standard four by default.
     let groups: Vec<String> = std::env::args().skip(2).collect();
-    let groups: Vec<String> = if groups.is_empty() {
-        StatsAttr::STANDARD_GROUPS
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
+    let attrs = if groups.is_empty() {
+        StatsAttr::request(&dev, STANDARD_STATS_GROUPS)
     } else {
-        groups
+        vec![
+            StatsAttr::Header(Device::from(&dev).header(Default::default())),
+            StatsAttr::Groups(Bitset::select_names(groups)),
+        ]
     };
-    let attrs = StatsAttr::request(&dev, groups);
     // Show exactly what we send.
     let mut wire = vec![0u8; attrs.as_slice().buffer_len()];
     attrs.as_slice().emit(&mut wire);

@@ -14,9 +14,8 @@
 
 use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST};
 use netlink_packet_ethtool::{
-    Bitset, BitsetBit, EepromWindow, EthtoolCmd, EthtoolMessage, FeaturesAttr, FecAttr,
-    LinkInfoAttr, LinkModesAttr, LinkStateAttr, ModuleEepromAttr, PauseAttr, PrivFlagsAttr,
-    RequestFlags, StatsAttr, StatsGroupId, StringSet, StrsetAttr,
+    EepromWindow, EthtoolCmd, EthtoolMessage, FeaturesAttr, FecAttr, LinkInfoAttr, LinkModesAttr,
+    LinkStateAttr, ModuleEepromAttr, PauseAttr, PrivFlagsAttr, StatsAttr, StatsGroupId, StrsetAttr,
 };
 use netlink_packet_generic::GenlMessage;
 
@@ -44,148 +43,75 @@ where
     NetlinkMessage::new(header, GenlMessage::from_payload(payload).into())
 }
 
-/// The ethtool flags for a `GET` that may carry an optional statistics nest.
-fn stats_flags(stats: bool) -> RequestFlags {
-    RequestFlags {
-        stats,
-        ..Default::default()
-    }
-}
-
 pub(crate) fn link_info(device: &Device) -> EthtoolMessage {
-    EthtoolMessage::LinkInfo(
-        EthtoolCmd::LinkinfoGet,
-        vec![LinkInfoAttr::Header(device.header(RequestFlags::default()))],
-    )
+    EthtoolMessage::LinkInfo(EthtoolCmd::LinkinfoGet, LinkInfoAttr::request(device))
 }
 
 pub(crate) fn link_modes(device: &Device) -> EthtoolMessage {
-    EthtoolMessage::LinkModes(
-        EthtoolCmd::LinkmodesGet,
-        vec![LinkModesAttr::Header(
-            device.header(RequestFlags::default()),
-        )],
-    )
+    EthtoolMessage::LinkModes(EthtoolCmd::LinkmodesGet, LinkModesAttr::request(device))
 }
 
 pub(crate) fn link_state(device: &Device) -> EthtoolMessage {
-    EthtoolMessage::LinkState(
-        EthtoolCmd::LinkstateGet,
-        vec![LinkStateAttr::Header(
-            device.header(RequestFlags::default()),
-        )],
-    )
+    EthtoolMessage::LinkState(EthtoolCmd::LinkstateGet, LinkStateAttr::request(device))
 }
 
 pub(crate) fn pause(device: &Device, stats: bool) -> EthtoolMessage {
-    EthtoolMessage::Pause(
-        EthtoolCmd::PauseGet,
-        vec![PauseAttr::Header(device.header(stats_flags(stats)))],
-    )
+    let attributes = if stats {
+        PauseAttr::request_with_stats(device)
+    } else {
+        PauseAttr::request(device)
+    };
+    EthtoolMessage::Pause(EthtoolCmd::PauseGet, attributes)
 }
 
 pub(crate) fn features(device: &Device) -> EthtoolMessage {
-    EthtoolMessage::Features(
-        EthtoolCmd::FeaturesGet,
-        vec![FeaturesAttr::Header(device.header(RequestFlags::default()))],
-    )
+    EthtoolMessage::Features(EthtoolCmd::FeaturesGet, FeaturesAttr::request(device))
 }
 
 pub(crate) fn private_flags(device: &Device) -> EthtoolMessage {
-    EthtoolMessage::PrivFlags(
-        EthtoolCmd::PrivflagsGet,
-        vec![PrivFlagsAttr::Header(
-            device.header(RequestFlags::default()),
-        )],
-    )
+    EthtoolMessage::PrivFlags(EthtoolCmd::PrivflagsGet, PrivFlagsAttr::request(device))
 }
 
 pub(crate) fn fec(device: &Device, stats: bool) -> EthtoolMessage {
-    EthtoolMessage::Fec(
-        EthtoolCmd::FecGet,
-        vec![FecAttr::Header(device.header(stats_flags(stats)))],
-    )
+    let attributes = if stats {
+        FecAttr::request_with_stats(device)
+    } else {
+        FecAttr::request(device)
+    };
+    EthtoolMessage::Fec(EthtoolCmd::FecGet, attributes)
 }
 
-/// The name the kernel resolves a group by, against `ETH_SS_STATS_STD`.
-pub(crate) fn stats_group_name(group: StatsGroupId) -> Option<&'static str> {
-    match group {
-        StatsGroupId::EthPhy => Some("eth-phy"),
-        StatsGroupId::EthMac => Some("eth-mac"),
-        StatsGroupId::EthCtrl => Some("eth-ctrl"),
-        StatsGroupId::Rmon => Some("rmon"),
-        _ => None,
-    }
-}
-
-/// A `STATS_GET` for `groups`.
-///
-/// Known groups are selected **by name**, as `ethtool(8)` does, because the
-/// group ids are in no uapi header. A group this crate cannot name is
-/// selected by its id.
-///
-/// No [`RequestFlags::stats`]: `STATS_GET` is the statistics command and
-/// does not need asking.
+/// A `STATS_GET` for `groups`, known ones selected by name as `ethtool(8)`
+/// does; see [`StatsAttr::request`].
 pub(crate) fn stats(device: &Device, groups: &[StatsGroupId]) -> EthtoolMessage {
-    let bits = groups
-        .iter()
-        .map(|group| match stats_group_name(*group) {
-            Some(name) => BitsetBit {
-                index: None,
-                name: Some(name.to_string()),
-                value: true,
-            },
-            None => BitsetBit {
-                index: Some(u32::from(*group)),
-                name: None,
-                value: true,
-            },
-        })
-        .collect();
     EthtoolMessage::Stats(
         EthtoolCmd::StatsGet,
-        vec![
-            StatsAttr::Header(device.header(RequestFlags::default())),
-            StatsAttr::Groups(Bitset {
-                nomask: true,
-                bits,
-                ..Default::default()
-            }),
-        ],
+        StatsAttr::request(device, groups.iter().copied()),
     )
 }
 
 /// A `STRSET_GET` for the sets `ids`, of `device` or, with `None`, the
 /// global ones.
 pub(crate) fn string_sets(device: Option<&Device>, ids: &[u32]) -> EthtoolMessage {
-    let mut attributes = Vec::new();
-    if let Some(device) = device {
-        attributes.push(StrsetAttr::Header(device.header(RequestFlags::default())));
-    }
-    attributes.push(StrsetAttr::StringSets(
-        ids.iter()
-            .map(|id| StringSet {
-                id: Some(*id),
-                count: None,
-                strings: Vec::new(),
-            })
-            .collect(),
-    ));
+    let ids = ids.iter().copied();
+    let attributes = match device {
+        Some(device) => StrsetAttr::request_sets(device, ids),
+        None => StrsetAttr::request_global(ids),
+    };
     EthtoolMessage::Strset(EthtoolCmd::StrsetGet, attributes)
 }
 
 pub(crate) fn module_eeprom(device: &Device, window: EepromWindow) -> EthtoolMessage {
-    let attributes = match device {
-        Device::Name(name) => ModuleEepromAttr::request(name, window),
-        Device::Index(index) => ModuleEepromAttr::request_by_index(*index, window),
-    };
-    EthtoolMessage::ModuleEeprom(EthtoolCmd::ModuleEepromGet, attributes)
+    EthtoolMessage::ModuleEeprom(
+        EthtoolCmd::ModuleEepromGet,
+        ModuleEepromAttr::request(device, window),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use netlink_packet_core::NetlinkPayload;
-    use netlink_packet_ethtool::HeaderAttr;
+    use netlink_packet_ethtool::{BitsetBit, HeaderAttr, RequestFlags};
 
     use super::*;
 
@@ -291,19 +217,15 @@ mod tests {
 
     #[test]
     fn requests_name_the_device_they_were_given() {
-        bolero::check!()
-            .with_type::<(String, u32)>()
-            .for_each(|(name, index)| {
-                for device in [Device::Name(name.clone()), Device::Index(*index)] {
-                    for message in every_get(&device) {
-                        let identity: Vec<_> = header_of(&message)
-                            .into_iter()
-                            .filter(|a| !matches!(a, HeaderAttr::Flags(_)))
-                            .collect();
-                        assert_eq!(identity, device.header(RequestFlags::default()));
-                    }
-                }
-            });
+        bolero::check!().with_type::<Device>().for_each(|device| {
+            for message in every_get(device) {
+                let identity: Vec<_> = header_of(&message)
+                    .into_iter()
+                    .filter(|a| !matches!(a, HeaderAttr::Flags(_)))
+                    .collect();
+                assert_eq!(identity, device.header(RequestFlags::default()));
+            }
+        });
     }
 
     #[test]
@@ -364,13 +286,12 @@ mod tests {
     }
 
     #[test]
-    fn global_string_sets_carry_no_header() {
+    fn global_string_sets_carry_an_empty_header() {
+        // Not none: without a header the kernel answers EINVAL.
         let EthtoolMessage::Strset(_, attributes) = string_sets(None, &[4, 9]) else {
             panic!("not a strset request");
         };
-        assert!(!attributes
-            .iter()
-            .any(|a| matches!(a, StrsetAttr::Header(_))));
+        assert_eq!(attributes[0], StrsetAttr::Header(Vec::new()));
         let ids: Vec<_> = attributes
             .iter()
             .flat_map(|a| match a {
