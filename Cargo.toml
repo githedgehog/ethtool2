@@ -3,6 +3,7 @@
 name = "ethtool2"
 version = "0.1.0"
 edition = "2021"
+repository = "https://github.com/githedgehog/ethtool2"
 keywords = ["netlink", "linux", "ethtool"]
 license = "MIT"
 readme = "README.md"
