@@ -1,122 +1,80 @@
 // SPDX-License-Identifier: MIT
-//! Minimal handle, enough to talk to the kernel while the packet crate is
-//! being verified.
-use futures::stream::StreamExt;
-use genetlink::GenetlinkHandle;
-use netlink_packet_core::{
-    NetlinkHeader, NetlinkMessage, NetlinkPayload, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST,
+
+//! Query Linux network devices through the `ethtool` generic netlink family.
+//!
+//! ```no_run
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! use ethtool2 as ethtool;
+//!
+//! let (connection, handle) = ethtool::new_connection()?;
+//! tokio::spawn(connection);
+//!
+//! let modes = handle.link_modes("eth0").await?;
+//! let state = handle.link_state("eth0").await?;
+//! println!("{:?} Mb/s, link {:?}", modes.speed, state.link);
+//!
+//! // Counters only arrive when asked for; the `_with_stats` methods ask.
+//! let pause = handle.pause_with_stats("eth0").await?;
+//! println!("{:?}", pause.stats);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Devices are named by [`Device`]: a `&str` or `String` is a name, a `u32`
+//! an interface index.
+//!
+//! Each method is one `ethtool(8)` query and returns a typed view: named
+//! fields for what the crate understands, plus every attribute the kernel
+//! sent, so nothing is lost to a field this crate does not have yet. For
+//! anything without a method, [`Handle::request`] takes a message built with
+//! the packet crate, re-exported as [`packet_ethtool`]; its module docs record
+//! the wire-format traps, such as statistics arriving only when the request
+//! sets [`RequestFlags::stats`]. [`Handle::raw`] goes one step further and
+//! skips decoding altogether.
+//!
+//! Everything here is a `GET`. Only [`Handle::module_eeprom`] needs a
+//! capability: `CAP_NET_ADMIN`.
+
+pub use netlink_packet_ethtool as packet_ethtool;
+
+mod device;
+mod errors;
+mod handle;
+mod raw;
+mod request;
+mod views;
+
+pub use netlink_packet_ethtool::{
+    Bitset, BitsetBit, Duplex, EepromWindow, FecCounter, FecHistBin, FecStats, HistBucket,
+    LinkExtState, PauseStats, RequestFlags, StatsGroupId, StringEntry, StringSet, WindowError,
 };
-use netlink_packet_ethtool::EthtoolMessage;
-use netlink_packet_generic::GenlMessage;
 
-#[derive(Clone)]
-pub struct Handle(GenetlinkHandle);
+pub use self::{
+    device::Device,
+    errors::Error,
+    handle::Handle,
+    raw::RawMessage,
+    views::{
+        Counter, Feature, Features, Fec, GroupStats, LinkInfo, LinkModes, LinkState, Pause, Port,
+        PrivateFlags, ReplyDevice, Stats, StringSets,
+    },
+};
 
-pub fn new_connection() -> std::io::Result<(impl std::future::Future<Output = ()>, Handle)> {
-    let (connection, handle, _) = genetlink::new_connection()?;
-    Ok((connection, Handle(handle)))
-}
+/// The four standardised statistics groups, for [`Handle::stats`].
+pub const STANDARD_STATS_GROUPS: [StatsGroupId; 4] = [
+    StatsGroupId::EthPhy,
+    StatsGroupId::EthMac,
+    StatsGroupId::EthCtrl,
+    StatsGroupId::Rmon,
+];
 
-impl Handle {
-    pub async fn request(
-        &self,
-        message: EthtoolMessage,
-        dump: bool,
-    ) -> Result<Vec<EthtoolMessage>, String> {
-        let mut header = NetlinkHeader::default();
-        header.flags = if dump {
-            NLM_F_REQUEST | NLM_F_DUMP
-        } else {
-            NLM_F_REQUEST | NLM_F_ACK
-        };
-        let message = NetlinkMessage::new(header, GenlMessage::from_payload(message).into());
-        let mut handle = self.0.clone();
-        let mut responses = handle.request(message).await.map_err(|e| e.to_string())?;
-        let mut collected = Vec::new();
-        while let Some(result) = responses.next().await {
-            match result.map_err(|e| e.to_string())?.payload {
-                NetlinkPayload::InnerMessage(inner) => collected.push(inner.payload),
-                NetlinkPayload::Error(e) => {
-                    if let Some(code) = e.code {
-                        return Err(format!("kernel: {code}"));
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(collected)
-    }
-}
-
-/// An ethtool message that is never interpreted: raw attribute bytes in,
-/// raw attribute bytes out.
+/// Open a connection to the ethtool family.
 ///
-/// Only for probing. When the typed decoder and the kernel disagree, this is
-/// how to find out which one is wrong.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Opaque {
-    pub cmd: u8,
-    pub payload: Vec<u8>,
-}
-
-impl netlink_packet_generic::GenlFamily for Opaque {
-    fn family_name() -> &'static str {
-        netlink_packet_ethtool::ETHTOOL_GENL_NAME
-    }
-    fn command(&self) -> u8 {
-        self.cmd
-    }
-    fn version(&self) -> u8 {
-        1
-    }
-}
-
-impl netlink_packet_core::Emitable for Opaque {
-    fn buffer_len(&self) -> usize {
-        self.payload.len()
-    }
-    fn emit(&self, buffer: &mut [u8]) {
-        buffer[..self.payload.len()].copy_from_slice(&self.payload)
-    }
-}
-
-impl netlink_packet_core::ParseableParametrized<[u8], netlink_packet_generic::GenlHeader>
-    for Opaque
-{
-    fn parse_with_param(
-        buffer: &[u8],
-        header: netlink_packet_generic::GenlHeader,
-    ) -> Result<Self, netlink_packet_core::DecodeError> {
-        Ok(Self {
-            cmd: header.cmd,
-            payload: buffer.to_vec(),
-        })
-    }
-}
-
-impl Handle {
-    /// Send raw attribute bytes and return the raw replies.
-    pub async fn raw(&self, cmd: u8, payload: Vec<u8>) -> Result<Vec<Opaque>, String> {
-        let mut header = NetlinkHeader::default();
-        header.flags = NLM_F_REQUEST | NLM_F_ACK;
-        let message = NetlinkMessage::new(
-            header,
-            GenlMessage::from_payload(Opaque { cmd, payload }).into(),
-        );
-        let mut handle = self.0.clone();
-        let mut responses = handle.request(message).await.map_err(|e| e.to_string())?;
-        let mut out = Vec::new();
-        while let Some(result) = responses.next().await {
-            match result.map_err(|e| e.to_string())?.payload {
-                NetlinkPayload::InnerMessage(inner) => out.push(inner.payload),
-                NetlinkPayload::Error(e) => {
-                    if let Some(code) = e.code {
-                        return Err(format!("kernel: {code}"));
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(out)
-    }
+/// Spawn the returned future, then send requests through the handle. The
+/// family id is resolved on the first request.
+#[cfg(feature = "tokio_socket")]
+pub fn new_connection() -> std::io::Result<(impl std::future::Future<Output = ()>, Handle)> {
+    let (connection, genl_handle, _messages) = genetlink::new_connection()?;
+    Ok((connection, Handle::from_genetlink(genl_handle)))
 }

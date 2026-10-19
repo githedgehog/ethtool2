@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Walk a reply generically, printing nla kind/len, to settle encodings.
-use netlink_packet_core::{Emitable, NlasIterator};
-use netlink_packet_ethtool::{constants::*, StatsAttr};
+//!
+//! `probe_raw <dev> [depth] [group...]` sends a `STATS_GET` through the raw
+//! escape hatch, so nothing on the way back is decoded by the packet crate.
+use ethtool2::{
+    packet_ethtool::{constants::ETHTOOL_MSG_STATS_GET, StatsAttr},
+    RawMessage,
+};
+use netlink_packet_core::NlasIterator;
 
 fn walk(payload: &[u8], depth: usize, limit: usize) {
     if depth > limit {
@@ -36,7 +42,9 @@ fn walk(payload: &[u8], depth: usize, limit: usize) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let dev = std::env::args().nth(1).unwrap();
+    let dev = std::env::args()
+        .nth(1)
+        .ok_or("usage: probe_raw <dev> [depth] [group...]")?;
     let depth: usize = std::env::args()
         .nth(2)
         .and_then(|a| a.parse().ok())
@@ -50,11 +58,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         groups
     };
-    let attrs = StatsAttr::request(&dev, groups);
-    let mut wire = vec![0u8; attrs.as_slice().buffer_len()];
-    attrs.as_slice().emit(&mut wire);
+    let request = RawMessage::encode(ETHTOOL_MSG_STATS_GET, &StatsAttr::request(&dev, groups));
 
-    match handle.raw(ETHTOOL_MSG_STATS_GET, wire).await {
+    match handle.raw(request, false).await {
         Ok(replies) => {
             println!("{} reply message(s)", replies.len());
             for reply in &replies {

@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: MIT
 //! Dump a raw STATS_GET reply so the `type-value` encoding can be read off
 //! the wire rather than guessed at.
+//!
+//! Goes through [`ethtool2::Handle::request`] with a message built by the
+//! packet crate, and prints the decoded groups without any view on top.
+use ethtool2::packet_ethtool::{EthtoolCmd, EthtoolMessage, StatsAttr};
 use netlink_packet_core::Emitable;
-use netlink_packet_ethtool::{EthtoolCmd, EthtoolMessage, StatsAttr};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let dev = std::env::args().nth(1).unwrap();
+    let dev = std::env::args()
+        .nth(1)
+        .ok_or("usage: probe_stats <dev> [group...]")?;
     let (connection, handle) = ethtool2::new_connection()?;
     tokio::spawn(connection);
 

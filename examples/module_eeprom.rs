@@ -3,15 +3,20 @@
 //! `ethtool -m <dev> page <page> bank <bank> offset <offset> length 128 raw on`.
 //!
 //! `module_eeprom <dev|ifindex> [page] [bank] [lower]` writes the bytes to stdout,
-//! so the output can be compared with ethtool's byte for byte.
+//! so the output can be compared with ethtool's byte for byte. A device given
+//! as a number is addressed by interface index.
+//!
+//! Needs `CAP_NET_ADMIN`.
 use std::io::Write;
 
-use netlink_packet_ethtool::{EepromWindow, EthtoolCmd, EthtoolMessage, ModuleEepromAttr};
+use ethtool2::{Device, EepromWindow};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    let dev = args.get(1).ok_or("usage: module_eeprom <dev|ifindex> [page] [bank] [lower]")?;
+    let dev = args
+        .get(1)
+        .ok_or("usage: module_eeprom <dev|ifindex> [page] [bank] [lower]")?;
     let number = |at: usize| -> Result<u8, Box<dyn std::error::Error>> {
         match args.get(at) {
             Some(text) => Ok(u8::from_str_radix(text.trim_start_matches("0x"), 16)?),
@@ -24,25 +29,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         EepromWindow::upper(0x50, page, bank)?
     };
-    let attrs = match dev.parse::<u32>() {
-        Ok(index) => ModuleEepromAttr::request_by_index(index, window),
-        Err(_) => ModuleEepromAttr::request(dev, window),
+    let device = match dev.parse::<u32>() {
+        Ok(index) => Device::Index(index),
+        Err(_) => Device::from(dev),
     };
 
     let (connection, handle) = ethtool2::new_connection()?;
     tokio::spawn(connection);
-    for reply in handle
-        .request(
-            EthtoolMessage::ModuleEeprom(EthtoolCmd::ModuleEepromGet, attrs),
-            false,
-        )
-        .await?
-    {
-        let EthtoolMessage::ModuleEeprom(_, attributes) = reply else {
-            continue;
-        };
-        let data = ModuleEepromAttr::data(&attributes).ok_or("reply without data")?;
-        std::io::stdout().write_all(data)?;
-    }
+    let data = handle.module_eeprom(device, window).await?;
+    std::io::stdout().write_all(&data)?;
     Ok(())
 }
