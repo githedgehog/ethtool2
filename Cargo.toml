@@ -3,9 +3,12 @@
 name = "ethtool2"
 version = "0.1.0"
 edition = "2021"
+keywords = ["netlink", "linux", "ethtool"]
 license = "MIT"
+readme = "README.md"
 publish = false
-description = "scratch handle crate for verifying netlink-packet-ethtool against hardware"
+description = "query Linux network devices through the ethtool generic netlink family"
+rust-version = "1.71"
 
 [features]
 default = ["tokio_socket"]
@@ -13,11 +16,16 @@ tokio_socket = ["genetlink/tokio_socket", "tokio"]
 
 [dependencies]
 futures = "0.3"
-genetlink = { version = "0.2", path = "../genetlink", default-features = false }
+genetlink = { version = "0.2", default-features = false }
 netlink-packet-core = "0.8"
-netlink-packet-ethtool = { version = "0.1", path = "../netlink-packet-ethtool" }
+netlink-packet-ethtool = { version = "0.1", git = "https://github.com/githedgehog/netlink-packet-ethtool.git", branch = "module-eeprom" }
 netlink-packet-generic = "0.4"
+thiserror = "2"
 tokio = { version = "1", features = ["rt"], optional = true }
 
 [dev-dependencies]
+bolero = "0.13"
+# The same packet crate, with its `TypeGenerator` derives, so the view tests
+# can feed arbitrary attribute lists through the views.
+netlink-packet-ethtool = { version = "0.1", git = "https://github.com/githedgehog/netlink-packet-ethtool.git", branch = "module-eeprom", features = ["bolero"] }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
